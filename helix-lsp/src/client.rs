@@ -62,6 +62,9 @@ pub struct Client {
     initialize_notify: Arc<Notify>,
     /// workspace folders added while the server is still initializing
     req_timeout: u64,
+
+    pub(crate) semantic_token_types_legend: std::sync::RwLock<Vec<Arc<str>>>,
+    pub(crate) semantic_token_modifiers_legend: std::sync::RwLock<Vec<Arc<str>>>,
 }
 
 impl Client {
@@ -258,6 +261,8 @@ impl Client {
             root_uri,
             workspace_folders: Mutex::new(workspace_folders),
             initialize_notify: initialize_notify.clone(),
+            semantic_token_types_legend: Default::default(),
+            semantic_token_modifiers_legend: Default::default(),
         };
 
         Ok((client, server_rx, initialize_notify))
@@ -405,6 +410,14 @@ impl Client {
                 },
             })
             .unwrap_or_default()
+    }
+
+    pub fn types_legend(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<str>>> {
+        self.semantic_token_types_legend.read().unwrap()
+    }
+
+    pub fn modifiers_legend(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<str>>> {
+        self.semantic_token_modifiers_legend.read().unwrap()
     }
 
     pub fn config(&self) -> Option<&Value> {
@@ -602,6 +615,9 @@ impl Client {
                         did_rename: Some(true),
                         ..Default::default()
                     }),
+                    semantic_tokens: Some(lsp::SemanticTokensWorkspaceClientCapabilities {
+                        refresh_support: Some(false),
+                    }),
                     ..Default::default()
                 }),
                 text_document: Some(lsp::TextDocumentClientCapabilities {
@@ -692,6 +708,20 @@ impl Client {
                     inlay_hint: Some(lsp::InlayHintClientCapabilities {
                         dynamic_registration: Some(false),
                         resolve_support: None,
+                    }),
+                    semantic_tokens: Some(lsp::SemanticTokensClientCapabilities {
+                        dynamic_registration: Some(true),
+                        requests: lsp::SemanticTokensClientCapabilitiesRequests {
+                            range: Some(true),
+                            full: Some(lsp::SemanticTokensFullOptions::Bool(false)),
+                        },
+                        token_types: Vec::new(),
+                        token_modifiers: Vec::new(),
+                        overlapping_token_support: Some(true),
+                        multiline_token_support: Some(true),
+                        server_cancel_support: Some(true),
+                        augments_syntax_tokens: Some(true),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 }),
@@ -1076,6 +1106,37 @@ impl Client {
         }
 
         Some(self.call_with_ref::<lsp::request::CodeActionResolveRequest>(code_action))
+    }
+
+    pub fn text_document_semantic_tokens(
+        &self,
+        text_document: lsp::TextDocumentIdentifier,
+        range: lsp::Range,
+        work_done_token: Option<lsp::ProgressToken>,
+    ) -> Option<impl Future<Output = Result<Option<lsp::SemanticTokensRangeResult>>>> {
+        let capabilities = self.capabilities.get().unwrap();
+
+        let support_range = match capabilities.semantic_tokens_provider.as_ref()? {
+            lsp::SemanticTokensServerCapabilities::SemanticTokensOptions(opt) => opt.range?,
+            lsp::SemanticTokensServerCapabilities::SemanticTokensRegistrationOptions(opt) => {
+                opt.semantic_tokens_options.range?
+            }
+        };
+
+        if !support_range {
+            return None;
+        }
+
+        Some(self.call::<lsp::request::SemanticTokensRangeRequest>(
+            lsp::SemanticTokensRangeParams {
+                work_done_progress_params: lsp::WorkDoneProgressParams { work_done_token },
+                partial_result_params: lsp::PartialResultParams {
+                    partial_result_token: None,
+                },
+                text_document,
+                range,
+            },
+        ))
     }
 
     pub fn text_document_signature_help(

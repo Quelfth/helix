@@ -514,6 +514,8 @@ pub struct LspConfig {
     pub snippets: bool,
     /// Whether to include declaration in the goto reference query
     pub goto_reference_include_declaration: bool,
+    /// Whether to enable semantic tokens
+    pub enable_semantic_tokens_highlighting: bool,
 }
 
 impl Default for LspConfig {
@@ -529,6 +531,7 @@ impl Default for LspConfig {
             snippets: true,
             goto_reference_include_declaration: true,
             display_color_swatches: true,
+            enable_semantic_tokens_highlighting: false,
         }
     }
 }
@@ -1665,6 +1668,12 @@ impl Editor {
         if !config.lsp.display_inlay_hints {
             for doc in self.documents_mut() {
                 doc.reset_all_inlay_hints();
+            }
+        }
+
+        if !config.lsp.enable_semantic_tokens_highlighting {
+            for doc in self.documents_mut() {
+                doc.reset_all_semantic_tokens();
             }
         }
 

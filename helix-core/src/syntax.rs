@@ -3,7 +3,9 @@ pub mod config;
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fmt, iter,
+    fmt,
+    io::Write,
+    iter,
     ops::{self, RangeBounds},
     path::Path,
     sync::Arc,
@@ -22,8 +24,9 @@ use tree_house::{
     highlighter,
     query_iter::QueryIter,
     tree_sitter::{
-        query::{InvalidPredicateError, UserPredicate},
-        Capture, Grammar, InactiveQueryCursor, InputEdit, Node, Pattern, Query, RopeInput, Tree,
+        query::{InvalidPredicateError, PredicateArg, UserPredicate},
+        Capture, Grammar, InactiveQueryCursor, InputEdit, Node, Pattern, Query, QueryMatch,
+        RopeInput, Tree,
     },
     Error, InjectionLanguageMarker, LanguageConfig as SyntaxConfig, Layer,
 };
@@ -70,6 +73,12 @@ impl LanguageData {
     ) -> Result<Option<SyntaxConfig>> {
         let name = &config.language_id;
         let parser_name = config.grammar.as_deref().unwrap_or(name);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open("/home/quelfth/file.txt")
+            .unwrap()
+            .write(format!("language: {name}\n").as_bytes())
+            .unwrap();
         let Some(grammar) = get_language(parser_name)? else {
             log::info!("Skipping syntax config for '{name}' because the parser's shared library does not exist");
             return Ok(None);
@@ -579,8 +588,9 @@ impl Syntax {
         source: RopeSlice<'a>,
         loader: &'a Loader,
         range: impl RangeBounds<u32>,
+        special_predicates: SpecialPredicates,
     ) -> Highlighter<'a> {
-        Highlighter::new(&self.inner, source, loader, range)
+        Highlighter::new(&self.inner, source, loader, range, special_predicates)
     }
 
     pub fn query_iter<'a, QueryLoader, LayerState, Range>(
@@ -684,7 +694,7 @@ impl Syntax {
     }
 }
 
-pub type Highlighter<'a> = highlighter::Highlighter<'a, 'a, Loader>;
+pub type Highlighter<'a> = highlighter::Highlighter<'a, 'a, Loader, SpecialPredicates>;
 
 fn generate_edits(old_text: RopeSlice, changeset: &ChangeSet) -> Vec<InputEdit> {
     use crate::Operation::*;
@@ -1177,6 +1187,43 @@ impl RainbowQuery {
             bracket_capture: query.get_capture("rainbow.bracket"),
             query,
         })
+    }
+}
+
+#[derive(Clone)]
+pub struct SpecialPredicates(Arc<dyn tree_house::highlighter::SpecialQueryPredicates>);
+
+impl tree_house::highlighter::SpecialQueryPredicates for SpecialPredicates {
+    fn matches(&self, name: &str, args: &[PredicateArg], query: &Query, mat: &QueryMatch) -> bool {
+        self.0.matches(name, args, query, mat)
+    }
+}
+
+impl SpecialPredicates {
+    pub fn empty() -> Self {
+        Self(Arc::new(()))
+    }
+
+    pub fn from_fn(
+        f: impl Fn(&str, &[PredicateArg], &Query, &QueryMatch) -> bool + 'static,
+    ) -> Self {
+        struct FnImpl<F>(F);
+
+        impl<F: Fn(&str, &[PredicateArg], &Query, &QueryMatch) -> bool>
+            tree_house::highlighter::SpecialQueryPredicates for FnImpl<F>
+        {
+            fn matches(
+                &self,
+                name: &str,
+                args: &[PredicateArg],
+                query: &Query,
+                mat: &QueryMatch,
+            ) -> bool {
+                self.0(name, args, query, mat)
+            }
+        }
+
+        Self(Arc::new(FnImpl(f)))
     }
 }
 

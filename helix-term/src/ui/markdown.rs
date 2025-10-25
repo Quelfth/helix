@@ -10,7 +10,7 @@ use std::sync::Arc;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use helix_core::{
-    syntax::{self, HighlightEvent, OverlayHighlights},
+    syntax::{self, HighlightEvent, OverlayHighlights, SpecialPredicates},
     RopeSlice, Syntax,
 };
 use helix_view::{
@@ -59,7 +59,7 @@ pub fn highlighted_code_block<'a>(
         return styled_multiline_text(text, code_style);
     };
 
-    let mut syntax_highlighter = syntax.highlighter(ropeslice, loader, ..);
+    let mut syntax_highlighter = syntax.highlighter(ropeslice, loader, .., SpecialPredicates::empty());
     let mut syntax_highlight_stack = Vec::new();
     let mut overlay_highlight_stack = Vec::new();
     let mut overlay_highlighter = syntax::OverlayHighlighter::new(additional_highlight_spans);

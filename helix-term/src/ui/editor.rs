@@ -297,7 +297,7 @@ impl EditorView {
         let range = Self::viewport_byte_range(text, row, height);
         let range = range.start as u32..range.end as u32;
 
-        let highlighter = syntax.highlighter(text, loader, range);
+        let highlighter = syntax.highlighter(text, loader, range, doc.special_predicates(anchor));
         Some(highlighter)
     }
 
@@ -475,12 +475,19 @@ impl EditorView {
         let cursorkind = cursor_shape_config.from_mode(mode);
         let cursor_is_block = cursorkind == CursorKind::Block;
 
-        let selection_scope = theme
-            .find_highlight_exact("ui.selection")
-            .expect("could not find `ui.selection` scope in the theme!");
-        let primary_selection_scope = theme
-            .find_highlight_exact("ui.selection.primary")
-            .unwrap_or(selection_scope);
+        let selection_scope = match mode {
+            Mode::Insert => theme.find_highlight_exact("ui.selection.insert"),
+            Mode::Select => theme.find_highlight_exact("ui.selection.select"),
+            Mode::Normal => theme.find_highlight_exact("ui.selection.normal"),
+        }
+        .or_else(|| theme.find_highlight_exact("ui.selection"))
+        .expect("could not find `ui.selection` scope in the theme!");
+        let primary_selection_scope = match mode {
+            Mode::Insert => theme.find_highlight_exact("ui.selection.primary.insert"),
+            Mode::Select => theme.find_highlight_exact("ui.selection.primary.select"),
+            Mode::Normal => theme.find_highlight_exact("ui.selection.primary.normal"),
+        }
+        .unwrap_or(selection_scope);
 
         let base_cursor_scope = theme
             .find_highlight_exact("ui.cursor")
@@ -1091,6 +1098,7 @@ impl EditorView {
 
     pub fn handle_idle_timeout(&mut self, cx: &mut commands::Context) -> EventResult {
         commands::compute_inlay_hints_for_all_views(cx.editor, cx.jobs);
+        commands::compute_semantic_tokens_for_all_views(cx.editor, cx.jobs);
 
         EventResult::Ignored(None)
     }

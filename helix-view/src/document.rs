@@ -11,7 +11,10 @@ use helix_core::doc_formatter::TextFormat;
 use helix_core::encoding::Encoding;
 use helix_core::snippets::{ActiveSnippet, SnippetRenderCtx};
 use helix_core::syntax::config::LanguageServerFeature;
+use helix_core::syntax::SpecialPredicates;
 use helix_core::text_annotations::{InlineAnnotation, Overlay};
+use helix_core::tree_sitter::query::PredicateArg;
+use helix_core::tree_sitter::QueryMatch;
 use helix_event::TaskController;
 use helix_lsp::util::lsp_pos_to_pos;
 use helix_stdx::faccess::{copy_metadata, readonly};
@@ -214,6 +217,9 @@ pub struct Document {
     // of storing a copy on every doc. Then we can remove the surrounding `Arc` and use the
     // `ArcSwap` directly.
     syn_loader: Arc<ArcSwap<syntax::Loader>>,
+
+    pub(crate) semantic_tokens: HashMap<ViewId, DocumentSemanticTokens>,
+    pub semantic_tokens_outdated: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -290,6 +296,13 @@ pub struct DocumentInlayHintsId {
     pub last_line: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct DocumentSemanticTokens {
+    pub first_line: usize,
+    pub last_line: usize,
+    pub tokens: Arc<[(Range, Vec<Arc<str>>)]>,
+}
+
 use std::{fmt, mem};
 impl fmt::Debug for Document {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -313,6 +326,8 @@ impl fmt::Debug for Document {
             .field("version", &self.version)
             .field("modified_since_accessed", &self.modified_since_accessed)
             .field("diagnostics", &self.diagnostics)
+            .field("semantic_tokens_outdated", &self.semantic_tokens_outdated)
+            .field("semantic_tokens", &self.semantic_tokens)
             // .field("language_server", &self.language_server)
             .finish()
     }
@@ -728,6 +743,8 @@ impl Document {
             color_swatches: None,
             color_swatch_controller: TaskController::new(),
             syn_loader,
+            semantic_tokens: HashMap::new(),
+            semantic_tokens_outdated: true,
         }
     }
 
@@ -1369,6 +1386,7 @@ impl Document {
         self.selections.remove(&view_id);
         self.inlay_hints.remove(&view_id);
         self.jump_labels.remove(&view_id);
+        self.semantic_tokens.remove(&view_id);
     }
 
     /// Apply a [`Transaction`] to the [`Document`] to change its text.
@@ -1492,6 +1510,17 @@ impl Document {
                 diagnostic.provider.clone(),
             )
         });
+
+        self.semantic_tokens_outdated = true;
+        for sem_ranges in &mut self.semantic_tokens.values_mut() {
+            let changes = transaction.changes();
+            let mut tokens = (*sem_ranges.tokens).to_owned();
+            for (range, _) in &mut tokens {
+                range.anchor = changes.map_pos(range.anchor, helix_core::Assoc::After);
+                range.head = changes.map_pos(range.head, helix_core::Assoc::After);
+            }
+            sem_ranges.tokens = tokens.into();
+        }
 
         // Update the inlay hint annotations' positions, helping ensure they are displayed in the proper place
         let apply_inlay_hint_changes = |annotations: &mut Vec<InlineAnnotation>| {
@@ -2112,6 +2141,140 @@ impl Document {
             data: diagnostic.data.clone(),
             provider,
         })
+    }
+
+    pub fn special_predicates(&self, anchor: usize) -> SpecialPredicates {
+        let view = self
+            .semantic_tokens
+            .keys()
+            .find(|k| self.view_offset(**k).anchor == anchor);
+        let semantics = view
+            .and_then(|view| self.semantic_tokens.get(view))
+            .cloned();
+        let text = self.text.clone();
+
+        SpecialPredicates::from_fn(move |name, args, query, mat: &QueryMatch| {
+            #[allow(clippy::single_match)]
+            match name {
+                "semantic?" => {
+                    if args.is_empty() {
+                        return false;
+                    }
+                    let PredicateArg::Capture(capture) = args[0] else {
+                        return false;
+                    };
+
+                    let Some(ref semantics) = semantics else {
+                        return false;
+                    };
+
+                    for node in mat.nodes_for_capture(capture) {
+                        let start = text.byte_to_char(node.start_byte() as usize);
+                        let end = text.byte_to_char(node.end_byte() as usize);
+
+                        let tokens = semantics
+                            .tokens
+                            .iter()
+                            .filter_map(|(r, s)| (r.anchor <= end && r.head > start).then_some(s))
+                            .collect::<Vec<_>>();
+
+                        if tokens.is_empty() {
+                            continue;
+                        };
+
+                        #[derive(Debug)]
+                        enum TokenKind {
+                            Type,
+                            Modifier,
+                        }
+
+                        struct Arg {
+                            kind: TokenKind,
+                            negated: bool,
+                            name: String,
+                        }
+
+                        let args = args
+                            .iter()
+                            .skip(1)
+                            .filter_map(|arg| {
+                                let PredicateArg::String(arg) = arg else {
+                                    return None;
+                                };
+                                let str = query.get_string(*arg);
+
+                                let mut chars = str.chars();
+                                let mut first_char = chars.next();
+                                let mut negated = false;
+
+                                if first_char == Some('!') {
+                                    negated = true;
+                                    first_char = chars.next();
+                                }
+
+                                let (kind, name) = match first_char {
+                                    Some(char) if char.is_uppercase() => (
+                                        TokenKind::Type,
+                                        char.to_lowercase().chain(chars).collect::<String>(),
+                                    ),
+                                    _ => (TokenKind::Modifier, str.to_owned()),
+                                };
+
+                                Some(Arg {
+                                    kind,
+                                    negated,
+                                    name,
+                                })
+                            })
+                            .collect::<Vec<_>>();
+
+                        let success = tokens.into_iter().any(move |tokens| {
+                            let mut iter = tokens.iter();
+                            let Some(ty) = iter.next() else { return false };
+                            let modifiers = iter.collect::<Vec<_>>();
+
+                            args.iter().all(
+                                |Arg {
+                                     kind: k,
+                                     negated,
+                                     name: s,
+                                 }| {
+                                    !*negated
+                                        == match k {
+                                            TokenKind::Type => *s == **ty,
+                                            TokenKind::Modifier => {
+                                                modifiers.iter().any(|m| **s == ***m)
+                                            }
+                                        }
+                                },
+                            )
+                        });
+                        if success {
+                            return true;
+                        };
+                    }
+                }
+
+                _ => {}
+            }
+
+            false
+        })
+    }
+
+    #[inline]
+    pub fn semantic_tokens(&self, view_id: ViewId) -> Option<&DocumentSemanticTokens> {
+        self.semantic_tokens.get(&view_id)
+    }
+
+    #[inline]
+    pub fn set_semantic_tokens(&mut self, view_id: ViewId, dst: DocumentSemanticTokens) {
+        self.semantic_tokens.insert(view_id, dst);
+    }
+
+    #[inline]
+    pub fn reset_all_semantic_tokens(&mut self) {
+        self.semantic_tokens = Default::default();
     }
 
     #[inline]

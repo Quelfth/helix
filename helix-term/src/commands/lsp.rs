@@ -1,3 +1,6 @@
+mod semantic_tokens;
+pub use semantic_tokens::*;
+
 use futures_util::{stream::FuturesOrdered, FutureExt};
 use helix_lsp::{
     block_on,

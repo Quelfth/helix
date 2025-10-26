@@ -2175,7 +2175,7 @@ impl Document {
                         let tokens = semantics
                             .tokens
                             .iter()
-                            .filter_map(|(r, s)| (r.anchor <= end && r.head > start).then_some(s))
+                            .filter_map(|(r, s)| (r.overlaps(&Range::new(start, end))).then_some(s))
                             .collect::<Vec<_>>();
 
                         if tokens.is_empty() {

@@ -3,9 +3,7 @@ pub mod config;
 use std::{
     borrow::Cow,
     collections::HashMap,
-    fmt,
-    io::Write,
-    iter,
+    fmt, iter,
     ops::{self, RangeBounds},
     path::Path,
     sync::Arc,
@@ -73,12 +71,6 @@ impl LanguageData {
     ) -> Result<Option<SyntaxConfig>> {
         let name = &config.language_id;
         let parser_name = config.grammar.as_deref().unwrap_or(name);
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open("/home/quelfth/file.txt")
-            .unwrap()
-            .write(format!("language: {name}\n").as_bytes())
-            .unwrap();
         let Some(grammar) = get_language(parser_name)? else {
             log::info!("Skipping syntax config for '{name}' because the parser's shared library does not exist");
             return Ok(None);

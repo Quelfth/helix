@@ -1139,6 +1139,33 @@ impl Client {
         ))
     }
 
+    pub fn text_document_semantic_tokens_full(
+        &self,
+        text_document: lsp::TextDocumentIdentifier,
+        work_done_token: Option<lsp::ProgressToken>,
+    ) -> Option<impl Future<Output = Result<Option<lsp::SemanticTokensResult>>>> {
+        if !match self.capabilities.get()?.semantic_tokens_provider.as_ref()? {
+            lsp::SemanticTokensServerCapabilities::SemanticTokensOptions(opt) => opt.range?,
+            lsp::SemanticTokensServerCapabilities::SemanticTokensRegistrationOptions(opt) => {
+                match opt.semantic_tokens_options.full.as_ref()? {
+                    lsp::SemanticTokensFullOptions::Bool(bool) => *bool,
+                    lsp::SemanticTokensFullOptions::Delta { .. } => true,
+                }
+            }
+        } {
+            return None;
+        }
+        Some(
+            self.call::<lsp::request::SemanticTokensFullRequest>(lsp::SemanticTokensParams {
+                work_done_progress_params: lsp::WorkDoneProgressParams { work_done_token },
+                partial_result_params: lsp::PartialResultParams {
+                    partial_result_token: None,
+                },
+                text_document,
+            }),
+        )
+    }
+
     pub fn text_document_signature_help(
         &self,
         text_document: lsp::TextDocumentIdentifier,

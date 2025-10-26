@@ -117,9 +117,7 @@ pub(crate) fn compute_semantic_tokens_for_view(
                             ),
                         ),
                     ) if !data.is_empty() => Some((ls, data)),
-                    _ => {
-                        None
-                    }
+                    _ => None,
                 }) else {
                     doc.set_semantic_tokens(
                         view_id,

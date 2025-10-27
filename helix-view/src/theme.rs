@@ -648,6 +648,13 @@ impl ThemePalette {
                             }
                         }
                     }
+                    "unmodifiers" => {
+                        let modifiers = value.as_array().ok_or("Unmodifiers should be an array")?;
+
+                        for modifier in modifiers {
+                            *style = style.remove_modifier(Self::parse_modifier(modifier)?);
+                        }
+                    }
                     _ => return Err(format!("Invalid style attribute: {}", name)),
                 }
             }

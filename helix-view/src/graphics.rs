@@ -358,6 +358,7 @@ impl FromStr for UnderlineStyle {
 
     fn from_str(modifier: &str) -> Result<Self, Self::Err> {
         match modifier {
+            "none" => Ok(Self::Reset),
             "line" => Ok(Self::Line),
             "curl" => Ok(Self::Curl),
             "dotted" => Ok(Self::Dotted),
